@@ -2,7 +2,8 @@
 //  Copyright (c) 2023 Apple Inc. All rights reserved.
 //  Provided subject to the LICENSE file in the top level directory.
 //
-
+// #include <iostream>
+// #include <fstream>
 #include <executorch/runtime/core/exec_aten/util/scalar_type_util.h>
 #include <executorch/runtime/core/exec_aten/util/tensor_util.h>
 #include <executorch/backends/apple/mps/schema_generated.h>
@@ -33,45 +34,39 @@ MPSExecutor::MPSExecutor() {
     _use_shared_mem = false;
   }
 
-  _inputsArray = [[NSMutableArray<MPSGraphTensorData *> alloc] init];
-  _outputsArray = [[NSMutableArray<MPSGraphTensorData *> alloc] init];
+  _inputsArray = [[NSMutableArray<MPSGraphTensorData *> alloc]  initWithCapacity:getNumInputs()];
+  _outputsArray = [[NSMutableArray<MPSGraphTensorData *> alloc] initWithCapacity:getNumOutputs()];
 }
 
 __ET_NODISCARD Error
 MPSExecutor::set_inputs_outputs(std::vector<const Tensor*>& inputs, std::vector<const Tensor*>& outputs) {
   ET_CHECK_OR_RETURN_ERROR(inputs.size() == getNumInputs(), Internal, "Inputs mismatch");
   ET_CHECK_OR_RETURN_ERROR(outputs.size() == getNumOutputs(), Internal, "Outputs mismatch");
-
-  if (_buffers_initialized) {
-    // When using shared memory, there is no need to blit
-    // the contents of the CPU buffer to the GPU
-    // Once a CPU buffer has been wrapped around a GPU buffer,
-    // it can be reused across different multiple inference runs.
-    if (!_use_shared_mem) {
-      updateDataBuffers(inputs, outputs);
-    }
-  } else {
-    updateDataBuffers(inputs, outputs);
-    for (MPSGraphTensor *tensor in [_executable feedTensors]) {
-      int i = _mpsGraphTensorToId[tensor];
-      MPSGraphTensorData* tensorData = [[MPSGraphTensorData alloc]initWithMTLBuffer:_inputGPUBuffers[i]
-                                                                              shape:[_inputShapes[i] shape]
-                                                                           dataType:[_inputShapes[i] dataType]];
-      [_inputsArray addObject:tensorData];
-    }
-
-    for (int i = 0; i < outputs.size(); i++) {
-      MPSGraphTensorData* tensorData = [[MPSGraphTensorData alloc] initWithMTLBuffer:_outputGPUBuffers[i]
-                                                                               shape:[_outputShapes[i] shape]
-                                                                            dataType:[_outputShapes[i] dataType]];
-      [_outputsArray addObject:tensorData];
-    }
-
+  // updateDataBuffers is a no-op for devices with shared memory.
+  // In case of devices with non-shared memory, it will blit the contents to a private GPU buffer.
+  updateDataBuffers(inputs, outputs);
+  for (MPSGraphTensor *tensor in [_executable feedTensors]) {
+    int i = _mpsGraphTensorToId[tensor];
+    MPSGraphTensorData* tensorData = [[[MPSGraphTensorData alloc]initWithMTLBuffer:_inputGPUBuffers[i]
+                                                                            shape:[_inputShapes[i] shape]
+                                                                          dataType:[_inputShapes[i] dataType]] autorelease];
+    _inputsArray[i] = tensorData;
+  }
+  _inputTensors = inputs;
+  for (int i = 0; i < outputs.size(); i++) {
+    MPSGraphTensorData* tensorData = [[[MPSGraphTensorData alloc] initWithMTLBuffer:_outputGPUBuffers[i]
+                                                                              shape:[_outputShapes[i] shape]
+                                                                          dataType:[_outputShapes[i] dataType]] autorelease];
+    _outputsArray[i] = tensorData;
   }
   return Error::Ok;
 }
 
 __ET_NODISCARD Error MPSExecutor::forward(std::vector<const Tensor*>& outputs) {
+  // std::ofstream logfile("logfile_no_backend.txt", std::ios_base::app);
+  // if (logfile.is_open()) {
+  //   logfile << "delegate input 0 before forward: " << _inputTensors[0]->const_data_ptr() << ", values [" << _inputTensors[0]->const_data_ptr<float>()[0] << ", " << _inputTensors[0]->const_data_ptr<float>()[1] << ", " << _inputTensors[0]->const_data_ptr<float>()[2] << ", " << _inputTensors[0]->const_data_ptr<float>()[3] << ", ...]" << std::endl;
+  // }
   Error err = Error::Ok;
   MPSStream* mpsStream = getDefaultMPSStream();
   if (mpsStream->commitAndContinueEnabled() || mpsStream->hasLiveCommandBuffer()) {
@@ -101,7 +96,13 @@ __ET_NODISCARD Error MPSExecutor::forward(std::vector<const Tensor*>& outputs) {
     Internal,
     "Could not synchronize on the MPSStream");
 #endif
-
+  // if (logfile.is_open()) {
+  //   logfile << "delegate input 0 after forward: " << _inputTensors[0]->const_data_ptr() << ", values [" << _inputTensors[0]->const_data_ptr<float>()[0] << ", " << _inputTensors[0]->const_data_ptr<float>()[1] << ", " << _inputTensors[0]->const_data_ptr<float>()[2] << ", " << _inputTensors[0]->const_data_ptr<float>()[3] << ", ...]" << std::endl;
+  //   logfile << "delegate output 0: " << outputs[0]->const_data_ptr() << ", values [" << outputs[0]->const_data_ptr<float>()[0] << ", " << outputs[0]->const_data_ptr<float>()[1] << ", " << outputs[0]->const_data_ptr<float>()[2] << ", " << outputs[0]->const_data_ptr<float>()[3] << ", ...]" << std::endl;
+  //   logfile.close();
+  // } else {
+  //   std::cerr << "Unable to open log file" << std::endl;
+  // }
   return Error::Ok;
 }
 
@@ -157,43 +158,41 @@ Error
 MPSExecutor::updateDataBuffers(
   std::vector<const Tensor*>& inputs, std::vector<const Tensor*>& outputs
 ) {
-  if (!_buffers_initialized) {
-    for (int i = 0; i < inputs.size(); i++) {
-      const Tensor& tensor = *inputs[i];
-      void* host_src = tensor.mutable_data_ptr<void*>();
-      if (_use_shared_mem) {
-        // Use directly the CPU buffer when using shared memory.
-        _inputGPUBuffers[i] = getMTLBufferStorage(tensor);
-      } else {
-        _inputCPUBuffers[i].flags = 0;
+  for (int i = 0; i < inputs.size(); i++) {
+    const Tensor& tensor = *inputs[i];
+    void* host_src = tensor.mutable_data_ptr<void*>();
+    if (_use_shared_mem) {
+      // Use directly the CPU buffer when using shared memory.
+      _inputGPUBuffers[i] = getMTLBufferStorage(tensor);
+    } else {
+      _inputCPUBuffers[i].flags = 0;
 #if TARGET_OS_SIMULATOR
-        // Simulator crashes when using newBufferWithBytesNoCopy.
-        // Use memcpy directly instead of using blit to copy the CPU
-        // data into the GPU buffer.
-        _inputCPUBuffers[i].srcOffset = 0;
-        _inputCPUBuffers[i].srcBuffer = host_src;
-        _inputCPUBuffers[i].srcCpu = 1;
+      // Simulator crashes when using newBufferWithBytesNoCopy.
+      // Use memcpy directly instead of using blit to copy the CPU
+      // data into the GPU buffer.
+      _inputCPUBuffers[i].srcOffset = 0;
+      _inputCPUBuffers[i].srcBuffer = host_src;
+      _inputCPUBuffers[i].srcCpu = 1;
 #else
-        MTLResourceOptions options = MTLResourceCPUCacheModeDefaultCache | MTLResourceStorageModeShared;
-        NSUInteger alignedLength = 0;
-        void* alignedPtr = pageAlignedBlockPtr(host_src, (NSUInteger)tensor.nbytes(), &alignedLength);
-        _inputCPUBuffers[i].srcOffset = uintptr_t(host_src) - uintptr_t(alignedPtr);
-        _inputCPUBuffers[i].srcBuffer = [MPSDevice::getInstance()->device() newBufferWithBytesNoCopy:alignedPtr
-                                                          length:alignedLength
-                                                        options:options
-                                                    deallocator:nil];
+      MTLResourceOptions options = MTLResourceCPUCacheModeDefaultCache | MTLResourceStorageModeShared;
+      NSUInteger alignedLength = 0;
+      void* alignedPtr = pageAlignedBlockPtr(host_src, (NSUInteger)tensor.nbytes(), &alignedLength);
+      _inputCPUBuffers[i].srcOffset = uintptr_t(host_src) - uintptr_t(alignedPtr);
+      _inputCPUBuffers[i].srcBuffer = [MPSDevice::getInstance()->device() newBufferWithBytesNoCopy:alignedPtr
+                                                        length:alignedLength
+                                                      options:options
+                                                  deallocator:nil];
 
 #endif
-        _inputCPUBuffers[i].dstBuffer = _inputGPUBuffers[i];
-        _inputCPUBuffers[i].dstOffset = 0;
-        _inputCPUBuffers[i].length = tensor.nbytes();
-      }
+      _inputCPUBuffers[i].dstBuffer = _inputGPUBuffers[i];
+      _inputCPUBuffers[i].dstOffset = 0;
+      _inputCPUBuffers[i].length = tensor.nbytes();
     }
+  }
 
-    if (_use_shared_mem) {
-      for (int i = 0; i < outputs.size(); i++) {
-        _outputGPUBuffers[i] = getMTLBufferStorage(*outputs[i]);
-      }
+  if (_use_shared_mem) {
+    for (int i = 0; i < outputs.size(); i++) {
+      _outputGPUBuffers[i] = getMTLBufferStorage(*outputs[i]);
     }
   }
 
