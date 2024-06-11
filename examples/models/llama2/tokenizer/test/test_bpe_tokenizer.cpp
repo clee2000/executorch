@@ -21,7 +21,7 @@ class TokenizerExtensionTest : public Test {
  public:
   void SetUp() override {
     torch::executor::runtime_init();
-    tokenizer_ = std::make_unique<BPETokenizer>(32000, 1, 2);
+    tokenizer_ = std::make_unique<BPETokenizer>();
     modelPath_ = std::getenv("RESOURCES_PATH") + std::string("/test.bin");
   }
 
