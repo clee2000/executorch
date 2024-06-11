@@ -50,9 +50,8 @@ TEST_F(TokenizerExtensionTest, DecodeOutOfRangeFails) {
 TEST_F(TokenizerExtensionTest, TokenizerVocabSizeIsExpected) {
   Error res = tokenizer_->load(modelPath_.c_str());
   EXPECT_EQ(res, Error::Ok);
-  // test.bin has vocab size 0 but the tokenizer respects the vocab size being
-  // passed in and add placeholder tokens.
-  EXPECT_EQ(tokenizer_->vocab_size(), 32000);
+  // test.bin has vocab size 0.
+  EXPECT_EQ(tokenizer_->vocab_size(), 0);
   EXPECT_EQ(tokenizer_->bos_tok(), 1);
   EXPECT_EQ(tokenizer_->eos_tok(), 2);
 }
