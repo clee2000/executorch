@@ -347,7 +347,7 @@ Error Tiktoken::load(const std::string& path) {
   vocab_size_ = _encoder.size() + _special_token_encoder.size();
   bos_tok_ = _special_token_encoder.at("<|begin_of_text|>");
   eos_tok_ = _special_token_encoder.at("<|end_of_text|>");
-  
+
   initialized_ = true;
   return Error::Ok;
 }

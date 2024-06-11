@@ -85,10 +85,11 @@ Error Runner::load() {
 #endif
   tokenizer_->load(tokenizer_path_);
 
-  vocab_size_ = getMetadataHelper<int64_t>("get_vocab_size", tokenizer_->vocab_size());
+  vocab_size_ =
+      getMetadataHelper<int64_t>("get_vocab_size", tokenizer_->vocab_size());
   bos_id_ = getMetadataHelper<int64_t>("get_bos_id", tokenizer_->bos_tok());
   eos_id_ = getMetadataHelper<int64_t>("get_eos_id", tokenizer_->eos_tok());
-  
+
   // Create sampler
   sampler_ = std::make_unique<Sampler>(
       vocab_size_,

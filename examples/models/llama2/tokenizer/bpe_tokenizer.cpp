@@ -23,8 +23,7 @@ static int compare_tokens(const void* a, const void* b) {
   return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
-BPETokenizer::BPETokenizer()
-    : Tokenizer() {
+BPETokenizer::BPETokenizer() : Tokenizer() {
   vocab_size_ = kVocabSize;
   vocab_ = std::make_unique<char*[]>(kVocabSize);
   vocab_scores_ = std::make_unique<float[]>(kVocabSize);
